@@ -1,0 +1,73 @@
+# .github/workflows/bot.yml
+#
+# Ajusta el cron y los nombres de secrets a los de tu workflow actual antes
+# de reemplazarlo. Lo esencial que aporta esta version es persistir
+# cache_traducciones.json junto al historial.
+
+name: Global News Bot
+
+on:
+  schedule:
+    - cron: "0 13 * * *"
+  workflow_dispatch:
+    inputs:
+      solo_diagnostico:
+        description: "Solo diagnostico de traduccion (no publica)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: global-news-bot
+  cancel-in-progress: false
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    env:
+      TOKEN: ${{ secrets.TOKEN }}
+      CHAT_ID: ${{ secrets.CHAT_ID }}
+      NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
+      DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
+      MYMEMORY_EMAIL: ${{ secrets.MYMEMORY_EMAIL }}
+      LIBRETRANSLATE_URL: ${{ vars.LIBRETRANSLATE_URL }}
+      TRADUCTOR_ORDEN: ${{ vars.TRADUCTOR_ORDEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Diagnostico de traduccion
+        continue-on-error: true
+        run: python diagnostico_traduccion.py
+
+      - name: Ejecutar bot
+        if: ${{ github.event.inputs.solo_diagnostico != 'true' }}
+        run: python telegram_bot.py
+
+      - name: Persistir historial y cache
+        if: ${{ always() && github.event.inputs.solo_diagnostico != 'true' }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add noticias_enviadas.json cache_traducciones.json 2>/dev/null || true
+          if git diff --staged --quiet; then
+            echo "Sin cambios que persistir."
+          else
+            git commit -m "chore: actualiza historial y cache [skip ci]"
+            git pull --rebase --autostash origin ${{ github.ref_name }} || true
+            git push
+          fi
